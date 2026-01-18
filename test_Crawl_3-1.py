@@ -1,141 +1,104 @@
-#Thuw viện và cấu hình chung cho việc crawl web
-import requests                  # Thư viện để gửi yêu cầu HTTP (tải trang web)
-from bs4 import BeautifulSoup    # Thư viện để phân tích cú pháp HTML
-import pandas as pd              # Thư viện xử lý dữ liệu dạng bảng (DataFrame)
-import time                      # Thư viện xử lý thời gian (ngủ, đo giờ)
-import re                        # Thư viện xử lý biểu thức chính quy (Regex) - dùng để lọc ngày tháng
-from datetime import datetime    # Thư viện xử lý định dạng ngày tháng
+import requests # thư viện gửi yêu cầu HTTP
+from bs4 import BeautifulSoup #thư viện BeautifulSoup để phân tích HTML
+import pandas as pd #thư viện Pandas để xử lý dữ liệu dạng bảng
+import time, random, re #thư viện hỗ trợ
+from datetime import datetime #thư viện xử lý ngày tháng
+from tqdm import tqdm #thư viện hiển thị thanh tiến trình
 
-# Cấu hình Header để giả lập trình duyệt thật(tránh bị server chặn (lỗi 403 Forbidden)).
+# --- CẤU HÌNH ---
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
 }
 
-
-#Hàm lấy chi tiết bài viết và ngày đăng
-
-def get_article_content(url):
+# Hàm lấy nội dung chi tiết bài báo
+def get_article_content(session, url):
     try:
-        # Gửi request vào trang chi tiết
-        response = requests.get(url, headers=HEADERS, timeout=10)
+        response = session.get(url, headers=HEADERS, timeout=10)
         soup = BeautifulSoup(response.content, "html.parser")
 
-        # Tìm thẻ chứa ngày đăng (Cấu trúc của VnExpress thường là span class="date")
+        # 1. Xử lý ngày đăng (Tìm thẻ date -> Chuẩn hóa về YYYY-MM-DD)
         date_tag = soup.find("span", class_="date")
         date_str = date_tag.text.strip() if date_tag else ""
+        try:
+            match = re.search(r'\d{1,2}/\d{1,2}/\d{4}', date_str)
+            clean_date = datetime.strptime(match.group(), '%d/%m/%Y').strftime(
+                '%Y-%m-%d') if match else datetime.now().strftime('%Y-%m-%d')
+        except:
+            clean_date = datetime.now().strftime('%Y-%m-%d')
 
-        # Xử lý chuỗi ngày tháng bằng Regex
-        # Tìm chuỗi có dạng: ngày/tháng/năm (ví dụ: 2x/01/20xx)
-        match = re.search(r"(\d{1,2}/\d{1,2}/\d{4})", date_str)
-        publish_date = None
+        # 2. Lấy Tiêu đề và Tóm tắt (Sapo)
+        title = soup.find("h1", class_="title-detail").text.strip() if soup.find("h1", class_="title-detail") else ""
+        sapo = soup.find("p", class_="description").text.strip() if soup.find("p", class_="description") else ""
 
-        if match:
-            # Chuyển đổi chuỗi thành đối tượng datetime để dễ sắp xếp
-            publish_date = datetime.strptime(match.group(1), "%d/%m/%Y")
-        return publish_date
+        # 3. Lấy Nội dung chính (Gộp các thẻ p có class Normal)
+        content_tags = soup.find_all("p", class_="Normal")#nếu là báo khác thì sửa class tương ứng
+        body_text = " ".join([tag.text.strip() for tag in content_tags])
+
+        # Nếu bài ảnh/video không có text class Normal, dùng tạm Sapo
+        if not body_text: body_text = sapo
+
+        return clean_date, title, sapo, body_text
+
     except Exception as e:
-        # Nếu có lỗi trả về None (ví dụ: lỗi kết nối, lỗi phân tích HTML)
-        return None
+        return None, None, None, None
 
-
-# Hàm crawl chính
-
-def scrape_real_news(base_category_url, target_count=300):
+# Hàm chính để cào dữ liệu từ vnexpress
+def scrape_data(base_url, target_count=300):#target_count: Số bài tự dộng cào nếu không nêu rõ số lượng
     data = []
     page = 1
+    session = requests.Session()  # Tối ưu: Dùng session để giữ kết nối ổn định
 
-    print(f"Đang thu thập dữ liệu từ: {base_category_url}")
-    print(f"Mục tiêu: {target_count} bài viết.")
+    print(f"--- Bắt đầu cào dữ liệu: {base_url} ---")
+    pbar = tqdm(total=target_count, desc="Tiến độ", unit="bài")
 
     while len(data) < target_count:
-        # Xử lý phân trang (Pagination)
-        # Trang 1 là link gốc, trang 2 trở đi thêm suffix "-p2", "-p3"...
-        if page == 1:
-            url = base_category_url
-        else:
-            url = f"{base_category_url}-p{page}"
+        # Tạo link phân trang (trang 1, trang 2...)
+        url = f"{base_url}-p{page}" if page > 1 else base_url
 
         try:
-            response = requests.get(url, headers=HEADERS, timeout=10)
+            response = session.get(url, headers=HEADERS, timeout=10)
             soup = BeautifulSoup(response.content, "html.parser")
+            articles = soup.find_all("h3", class_="title-news")
 
-            # Tìm tất cả thẻ chứa bài viết (class 'item-news' là đặc trưng của VnExpress)
-            articles = soup.find_all("article", class_="item-news")
-
-            if not articles:
-                print("Không tìm thấy bài viết hoặc đã hết trang.")
-                break
+            if not articles: break  # Hết bài thì dừng
 
             for article in articles:
-                # Kiểm tra số lượng
-                if len(data) >= target_count:
-                    break
+                if len(data) >= target_count: break
 
-                # Lấy tiêu đề và link
-                title_tag = article.find("h3", class_="title-news")
-                if not title_tag or not title_tag.find("a"):
-                    continue
+                a_tag = article.find("a")
+                if not a_tag: continue
 
-                title = title_tag.find("a").text.strip()
-                link = title_tag.find("a")["href"]
+                link = a_tag.get("href")
+                if "video" in link or "podcast" in link: continue  # Bỏ qua video
 
-                # Lọc bỏ Video/Podcast vì cấu trúc HTML khác biệt
-                if "video" in link or "podcast" in link:
-                    continue
+                # Vào chi tiết lấy nội dung
+                date, title, sapo, body = get_article_content(session, link)
 
-                # Lấy mô tả ngắn (Sapo)
-                desc_tag = article.find("p", class_="description")
-                # Một số bài sapo nằm trong thẻ <a> bên trong <p> => check
-                sapo = desc_tag.find("a").text.strip() if desc_tag and desc_tag.find("a") else ""
-                # *lấy ngày đăng bài
-                # Gọi hàm lấy ngay đăng để lấy ngày
-                publish_date = get_article_content(link)
-
-                # Chỉ lưu nếu có đủ thông tin quan trọng
-                if title and sapo and publish_date:
+                if title and body:
                     data.append({
-                        "date": publish_date,
+                        "date": date,
                         "title": title,
                         "sapo": sapo,
-                        "content_text": title + " " + sapo,  # Gộp text để tiện cho NLP sau này
-                        "link": link  # Nên lưu link để tra cứu lại nếu cần
+                        "content_text": f"{title} {sapo} {body}",  # Dữ liệu sạch để tiền xử lý sau này
+                        "link": link
                     })
+                    pbar.update(1)
 
-                    # In tiến độ ra màn hình
-                    if len(data) % 10 == 0:
-                        print(f"Đã lấy: {len(data)}/{target_count} bài.")
+                # ngừng ngẫu nhiên để tránh bị chặn IP
+                time.sleep(random.uniform(0.5, 1.2))
 
-                # Rate limiting để tránh bị chặn IP nếu cào quá nhanh
-                time.sleep(0.1)
-
-            page += 1  # Chuyển sang trang tiếp theo
+            page += 1  # Sang trang tiếp theo
 
         except Exception as e:
             print(f"Lỗi tại trang {page}: {e}")
             break
 
-    print(f"\n Hoàn thành! Tổng số bài lấy được: {len(data)}")
-    return pd.DataFrame(data)
+    pbar.close()
 
-#Chạy hàm crawl và lưu dữ liệu
-# Cấu hình tham số chạy
-URL_CAN_LAY = "https://vnexpress.net/the-thao"  # Đổi link chuyên mục tại đây
-SO_LUONG = 300
+    # Lưu file CSV (encoding utf-8-sig để Excel đọc được tiếng Việt)
+    pd.DataFrame(data).to_csv("dataset.csv", index=False, encoding="utf-8-sig")
+    print(f" Đã lưu {len(data)} bài vào file 'dataset.csv'")
 
-#  Gọi hàm thực thi
-df = scrape_real_news(URL_CAN_LAY, target_count=SO_LUONG)
 
-#  Sắp xếp dữ liệu theo thời gian (Mới nhất -> Cũ nhất hoặc ngược lại)
-df = df.sort_values(by='date', ascending=False)
-
-#  Hiển thị 5 dòng đầu tiên để kiểm tra
-print("\n Dữ liệu mẫu ")
-print(df.head())  # Trong Jupyter, dùng display() đẹp hơn print()
-
-#  Lưu ra file CSV
-file_name = 'dataset.csv'
-df.to_csv(file_name, index=False, encoding='utf-8-sig') # utf-8-sig để mở bằng Excel không lỗi font tiếng Việt
-
-print(f"\n lưu file: {file_name}")
-# kiểm tra thông tin file
-df.info()
+if __name__ == "__main__":
+    scrape_data("https://vnexpress.net/thoi-su", target_count=350) #target_count: Số bài muốn cào

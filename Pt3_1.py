@@ -1,117 +1,132 @@
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-from wordcloud import WordCloud
+import pandas as pd #thư viện Pandas để xử lý dữ liệu dạng bảng
+import matplotlib.pyplot as plt #thư viện vẽ biểu đồ
+import seaborn as sns #thư viện vẽ biểu đồ nâng cao
+from wordcloud import WordCloud #thư viện tạo WordCloud
+import joblib # Dùng để lưu model lại, sau này dùng tiếp không cần train lại
+import pyLDAvis
+import pyLDAvis.lda_model # Thư viện tạo dashboard tương tác cho LDA
+from sklearn.manifold import TSNE # Thuật toán giảm chiều dữ liệu để vẽ biểu đồ phân cụm
+import warnings
 
-# --- GIẢI THÍCH CÔNG DỤNG THƯ VIỆN ---
-# 1. Matplotlib (plt): Thư viện vẽ biểu đồ nền tảng, cơ bản nhất của Python.
-#    Nó giống như "giấy và bút chì", cho phép bạn vẽ mọi thứ từ đường thẳng đến biểu đồ phức tạp.
-#
-# 2. Seaborn (sns): Được xây dựng dựa trên Matplotlib nhưng "đẹp hơn" và "dễ dùng hơn".
-#    Nó giúp vẽ các biểu đồ thống kê màu sắc đẹp mắt mà không cần code quá nhiều dòng.
-#
-# 3. WordCloud: Công cụ chuyên dụng để tạo "đám mây từ khóa".
-#    Từ nào xuất hiện càng nhiều thì kích thước hiển thị càng to.
+warnings.filterwarnings("ignore")
 
-# --- CẤU HÌNH ĐẦU VÀO ---
-INPUT_FILE = 'preprocessing.csv'  # File csv kết quả từ bước LDA trước đó
-COLUMN_DATE = 'date'              # Tên cột ngày tháng (cần thay đổi nếu file bạn tên khác)
+# Cấu hình
+INPUT_FILE = 'preprocessing.csv'
+LDA_REPORT_FILE = 'lda_report.html'  # File kết quả tương tác cuối cùng
+# Các file model đã lưu từ processing
+MODEL_FILES = ['lda_model.pkl', 'vectorizer.pkl', 'data_vectorized.pkl']
 
+# Cài đặt font chữ để hiển thị Tiếng Việt
+plt.rcParams['figure.figsize'] = (12, 8) # Kích thước biểu đồ mặc định
+try:
+    plt.rcParams['font.family'] = 'Segoe UI'  # Font chuẩn trên Windows
+except:
+    pass  # Nếu không có thì dùng mặc định
 
-# 1. ĐỌC DỮ LIỆU
-print(f" Đang đọc dữ liệu từ '{INPUT_FILE}'...")
+# tải dữ liệu và model đã lưu
+print("-> Đang tải dữ liệu và model...")
 try:
     df = pd.read_csv(INPUT_FILE)
+    # Chuyển cột ngày về dạng thời gian để vẽ biểu đồ xu hướng
+    if 'date' in df.columns:
+        df['date'] = pd.to_datetime(df['date'], errors='coerce')
 
-    # Kiểm tra các cột bắt buộc
-    required_cols = ['Topic_ID', 'Topic_Keywords', 'clean_text', COLUMN_DATE]
-    if not all(col in df.columns for col in required_cols):
-        raise ValueError(f"File CSV thiếu một trong các cột bắt buộc: {required_cols}")
-
-    # Xử lý cột ngày tháng (Chuyển từ chuỗi sang datetime để vẽ biểu đồ đường)
-    df['date_obj'] = pd.to_datetime(df[COLUMN_DATE], errors='coerce')
-
-    # Tạo lại biến keywords_map từ dữ liệu trong file CSV để dùng cho việc gắn nhãn
-    # (Biến chuỗi 'Topic_ID' và 'Topic_Keywords' thành từ điển)
-    keywords_map = dict(zip(df.Topic_ID, df.Topic_Keywords))
-
-    NUM_TOPICS = df['Topic_ID'].nunique()  # Đếm số lượng chủ đề có trong file
-
+    # Load các dữ liệu đã nạp ở bước trước
+    lda_model = joblib.load('lda_model.pkl')
+    vectorizer = joblib.load('vectorizer.pkl')
+    X = joblib.load('data_vectorized.pkl')
 except Exception as e:
-    print(f" Lỗi đọc file: {e}")
+    print(f"LỖI: Không tìm thấy file dữ liệu hoặc model ({e}). Hãy chạy file xử lý trước.")
     exit()
 
-# 2. CẤU HÌNH FONT (Tránh lỗi tiếng Việt)
-plt.rcParams['font.sans-serif'] = ['Arial', 'Liberation Sans', 'DejaVu Sans']
-
-# --- BIỂU ĐỒ 1: PIE CHART (Tỷ trọng) ---
-print("Đang vẽ biểu đồ tròn...")
-plt.figure(figsize=(8, 8))
-topic_counts = df['Topic_ID'].value_counts()
-plt.pie(topic_counts, labels=[f"Chủ đề {i}" for i in topic_counts.index],
-        autopct='%1.1f%%', startangle=140, colors=sns.color_palette("pastel"))
-plt.title(f"Tỷ lệ phân bố {NUM_TOPICS} chủ đề", fontsize=14)
-plt.show()
-
-# --- BIỂU ĐỒ 2: BAR CHART (Số lượng + Từ khóa) ---
-print("Đang vẽ biểu đồ cột...")
-plt.figure(figsize=(12, 6))
-ax = sns.countplot(x='Topic_ID', data=df, hue='Topic_ID', palette='viridis', legend=False)
-plt.title("Số lượng bài viết trong từng nhóm chủ đề", fontsize=14)
-plt.xlabel("Mã chủ đề")
-plt.ylabel("Số bài viết")
-
-# In từ khóa lên đầu cột
-for p, label in zip(ax.patches, topic_counts.index):
-    if label in keywords_map:
-        # Lấy 2 từ khóa đầu tiên để hiển thị cho gọn
-        full_kw = str(keywords_map[label])
-        kw_short = ", ".join(full_kw.split(',')[:2])
-
-        ax.annotate(f"{kw_short}",
-                    (p.get_x() + p.get_width() / 2, p.get_height()),
-                    ha='center', va='bottom', xytext=(0, 5), textcoords='offset points', fontsize=9)
+# Biểu đồ Bar chart
+# Mục đích: Xem chủ đề nào hot nhất, được báo chí viết nhiều nhất
+print("-> Vẽ biểu đồ số lượng bài viết...")
+plt.figure(figsize=(10, 6))# Vẽ biểu đồ cột ngang
+sns.countplot(data=df, y='Topic_Name', order=df['Topic_Name'].value_counts().index, palette='viridis')
+plt.title('Thống kê số lượng bài viết theo chủ đề')
+plt.xlabel('Số lượng')
 plt.tight_layout()
 plt.show()
 
-# --- BIỂU ĐỒ 3: LINE CHART (Xu hướng thời gian) ---
-print("Đang vẽ biểu đồ đường...")
-# Loại bỏ dòng không có ngày tháng hợp lệ
-df_time = df.dropna(subset=['date_obj'])
+# Biểu đồ xu hướng theo thời gian
+# Mục đích: Xem sự quan tâm của dư luận thay đổi thế nào theo thời gian
+if 'date' in df.columns and df['date'].notna().any():
+    print("3. Vẽ biểu đồ xu hướng theo thời gian...")
+    # Gom nhóm dữ liệu theo Ngày và Chủ đề
+    timeline = df.groupby([df['date'].dt.date, 'Topic_Name']).size().unstack(fill_value=0)
 
-if not df_time.empty:
-    timeline_df = df_time.groupby([df_time['date_obj'].dt.date, 'Topic_ID']).size().unstack(fill_value=0)
-
-    plt.figure(figsize=(12, 6))
-    for topic_id in timeline_df.columns:
-        plt.plot(timeline_df.index, timeline_df[topic_id], marker='o', label=f"Chủ đề {topic_id}")
-
-    plt.title("Xu hướng thay đổi theo thời gian", fontsize=14)
-    plt.xlabel("Thời gian")
-    plt.ylabel("Số lượng tin bài")
-    plt.legend(title="Chủ đề", bbox_to_anchor=(1.05, 1), loc='upper left')
-    plt.grid(True, linestyle='--', alpha=0.7)
-    plt.xticks(rotation=45)
+    timeline.plot(kind='line', marker='o', linewidth=2, figsize=(12, 6))# Vẽ biểu đồ đường
+    plt.title('Diễn biến các chủ đề theo thời gian')
+    plt.ylabel('Số bài viết')
+    plt.grid(True, linestyle='--', alpha=0.5)
+    plt.legend(title='Chủ đề')
     plt.tight_layout()
     plt.show()
-else:
-    print("Không thể vẽ biểu đồ đường vì cột ngày tháng bị rỗng hoặc sai định dạng.")
 
-# --- BIỂU ĐỒ 4: WORD CLOUD ---
-print("Đang tạo Word Cloud...")
-# Tìm chủ đề lớn nhất
-top_topic_id = topic_counts.idxmax()
-# Gom văn bản của chủ đề đó lại
-text_corpus = " ".join(df[df['Topic_ID'] == top_topic_id]['clean_text'].astype(str))
+# Biểu đồ từ khóa quan trọng trong mỗi chủ đề
+# Mục đích: "Mổ xẻ" xem bên trong mỗi chủ đề, từ khóa nào đóng vai trò quyết định
+print("-> Vẽ trọng số từ khóa quan trọng...")
+feature_names = vectorizer.get_feature_names_out()
+n_top_words = 10  # Lấy 10 từ quan trọng nhất
+n_topics = len(lda_model.components_)
 
-# Lưu ý: Cần file font .ttf nếu muốn hiển thị tiếng Việt chuẩn trên WordCloud
-# Ví dụ: font_path='C:/Windows/Fonts/arial.ttf'
-wc = WordCloud(width=800, height=400, background_color='white', max_words=100).generate(text_corpus)
+# Tạo lưới biểu đồ con
+cols = 3
+rows = (n_topics // cols) + (1 if n_topics % cols != 0 else 0)
+fig, axes = plt.subplots(rows, cols, figsize=(15, 4 * rows))
+axes = axes.flatten()
 
-plt.figure(figsize=(10, 5))
-plt.imshow(wc, interpolation='bilinear')
-plt.axis('off')
-plt.title(f"WordCloud: Chủ đề phổ biến nhất (ID: {top_topic_id})", fontsize=14)
+for idx, topic in enumerate(lda_model.components_):
+    # Lấy index của các từ có trọng số cao nhất
+    top_indices = topic.argsort()[:-n_top_words - 1:-1]
+    top_features = [feature_names[i] for i in top_indices]
+    weights = topic[top_indices]
+
+    # Vẽ cột ngang
+    axes[idx].barh(top_features, weights, color='skyblue')
+    axes[idx].set_title(f'Topic {idx}', fontweight='bold')
+    axes[idx].invert_yaxis()  # Đảo ngược để từ quan trọng nhất lên đầu
+
+# Xóa các ô trống nếu số biểu đồ không lấp đầy lưới
+for i in range(idx + 1, len(axes)): fig.delaxes(axes[i])
+plt.tight_layout()
 plt.show()
 
-print("Hoàn tất!")
+# BẢN ĐỒ PHÂN CỤM (t-SNE)
+# Mục đích: Gom nhóm bài viết lên mặt phẳng 2D.
+# Nếu các cụm màu tách biệt rõ ràng -> Mô hình phân loại tốt.
+print("->Đang chạy thuật toán t-SNE...")
+# Perplexity: Tham số quan trọng, phải nhỏ hơn số lượng bài viết,(perplexity < num_samples / 3)
+perp = min(30, len(df) - 1)
+tsne = TSNE(n_components=2, perplexity=perp, random_state=42, init='random')# Giảm chiều dữ liệu về 2D
+tsne_out = tsne.fit_transform(X.toarray())
+
+plt.figure(figsize=(10, 8))
+sns.scatterplot(x=tsne_out[:, 0], y=tsne_out[:, 1], hue=df['Topic_Name'], palette='deep', s=60, alpha=0.8)
+plt.title('Bản đồ phân cụm bài viết (t-SNE)')
+plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+plt.tight_layout()
+plt.show()
+
+# Mây từ WordCloud cho mỗi chủ đề
+# Mục đích: Trực quan hóa vui mắt, từ nào càng to thì càng xuất hiện nhiều
+print("-> Vẽ WordCloud đại diện...")
+for t_id in sorted(df['Topic_ID'].unique()):
+    # Ghép toàn bộ văn bản thuộc chủ đề đó lại thành 1 chuỗi khổng lồ
+    text = " ".join(df[df['Topic_ID'] == t_id]['clean_text'].astype(str))
+    wc = WordCloud(width=800, height=300, background_color='white').generate(text)
+
+    plt.figure(figsize=(6, 3))
+    plt.imshow(wc, interpolation='bilinear')
+    plt.axis('off')
+    plt.title(f"Topic {t_id}")
+    plt.show()
+
+#  DASHBOARD TƯƠNG TÁC (pyLDAvis)
+# Mục đích: Tạo báo cáo tương tác để khám phá chi tiết các chủ đề
+print("-> Đang tạo báo cáo tương tác HTML...")
+vis_data = pyLDAvis.lda_model.prepare(lda_model, X, vectorizer)
+pyLDAvis.save_html(vis_data, LDA_REPORT_FILE)
+
+print(f"-> Hoàn tất! Mở file {LDA_REPORT_FILE} để xem báo cáo ")

@@ -1,122 +1,120 @@
-#Thư viện và cấu hình chung cho làm sạch dữ liệu văn bản tiếng Việt và Topic Modeling
+import pandas as pd# thư viện Pandas để xử lý dữ liệu dạng bảng
+import re #thư viện hỗ trợ xử lý chuỗi
+import os# thư viện hỗ trợ làm việc với file và đường dẫn
+import joblib  # Dùng để lưu model lại, sau này dùng tiếp không cần train lại
+from underthesea import word_tokenize  # Thư viện tách từ tiếng Việt tốt nhất hiện nay
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer # thư viện chuyển văn bản thành dạng số
+from sklearn.decomposition import LatentDirichletAllocation  # Thuật toán LDA để tìm chủ đề
 
-import pandas as pd  # Thư viện xử lý dữ liệu dạng bảng (DataFrame), giúp đọc/ghi file CSV dễ dàng
+# --- Cấu Hình ---
+INPUT_FILE = 'dataset.csv'  # File dữ liệu đầu vào
+OUTPUT_FILE = 'preprocessing.csv'  # File kết quả đầu ra
+NUM_TOPICS = 8  # Số lượng chủ đề muốn máy tìm
+STOPWORDS = set()  # Tập hợp các từ vô nghĩa (thì, là, mà...)
+STOP_FILES = ['vietnamese-stopwords.txt']  # File chứa danh sách từ vô nghĩa
 
-import re  # (Regular Expression) Dùng để tìm kiếm, thay thế ký tự lạ, làm sạch văn bản
+# Nạp danh sách từ vô nghĩa (nếu có file)
+for f in STOP_FILES:
+    if os.path.exists(f):
+        try:
+            content = open(f, encoding='utf-8').read().splitlines()
+            STOPWORDS.update(content)
+        except:
+            pass
 
-from underthesea import word_tokenize #  Dùng để tách từ tiếng Việt (Word Segmentation)-Quan trọng: Giúp máy hiểu "nhà máy" là 1 từ, thay vì 2 từ rời rạc "nhà" và "máy".
 
-# TfidfVectorizer: Chuyển đổi văn bản thô thành ma trận số liệu thống kê (TF-IDF)-Giúp xác định từ nào quan trọng trong văn bản (xuất hiện nhiều nhưng không đại trà).
-from sklearn.feature_extraction.text import TfidfVectorizer
-
-# LatentDirichletAllocation (LDA): Thuật toán Topic Modeling-Dùng để gom nhóm các văn bản có cấu trúc từ giống nhau vào cùng một chủ đề.
-from sklearn.decomposition import LatentDirichletAllocation
-
-INPUT_FILE = 'dataset.csv'        # Tên file CSV đầu vào
-OUTPUT_FILE = 'preprocessing.csv' # Tên file kết quả đầu ra
-COLUMN_NAME = 'content_text'      # Tên cột chứa dữ liệu văn bản
-
-# Danh sách Stopwords tiếng Việt-Đây là các từ không mang nhiều ý nghĩa phân loại chủ đề
-STOPWORDS = {
-    'là', 'của', 'và', 'các', 'những', 'trong', 'với', 'cho', 'người', 'được',
-    'khi', 'đã', 'sẽ', 'đang', 'về', 'ở', 'làm', 'ra', 'này', 'cũng', 'đến',
-    'từ', 'có', 'không', 'như', 'để', 'một', 'nhiều', 'theo', 'nhưng', 'bị',
-    'vì', 'tại', 'vào', 'do', 'lên', 'xuống', 'trên', 'dưới', 'ngày', 'tháng', 'năm',
-    'rằng', 'thì', 'mà'  # Bổ sung thêm vài từ phổ biến
-}
-
-# Hàm làm sạch text
+# Hàm làm sạch và tách từ
 def preprocess_text(text):
-    if not isinstance(text, str):  # Kiểm tra nếu giá trị là NaN hoặc không phải chuỗi
-        return ""
+    if not isinstance(text, str): return ""  # Kiểm tra nếu không phải chữ thì bỏ qua
 
-    # Chuyển thành chữ thường
+    # 1. Chuyển về chữ thường để "Hà Nội" và "hà nội" là một
     text = text.lower()
 
-    # Loại bỏ ký tự đặc biệt (giữ lại chữ cái và số)-Regex: [^\w\s] nghĩa là những gì không phải chữ (word) và khoảng trắng (space)
+    # 2. Xóa các ký tự đặc biệt (!@#$%), chỉ giữ lại chữ cái và số
     text = re.sub(r'[^\w\s]', '', text)
 
-    # Tách từ tiếng Việt bằng underthesea (format="text" để nối từ ghép bằng dấu gạch dưới) Ví dụ: "học sinh" -> "học_sinh"
+    # 3. Tách từ thông minh (Quan trọng với tiếng Việt)
+    # Ví dụ: "đất nước" -> "đất_nước" (gộp thành 1 từ có nghĩa)
     tokens = word_tokenize(text, format="text").split()
 
-    # Loại bỏ stopwords
-    tokens = [t for t in tokens if t not in STOPWORDS]
+    # 4. Lọc bỏ từ vô nghĩa (stopwords) và từ quá ngắn (1 ký tự)
+    tokens = [t for t in tokens if t not in STOPWORDS and len(t) > 1]
+
     return " ".join(tokens)
 
-#Đọc và kiểm tra dữ liệu
-try:
-    df = pd.read_csv(INPUT_FILE)
 
-    # Kiểm tra cột dữ liệu
-    if COLUMN_NAME not in df.columns:
-        raise ValueError(f"Lỗi: Không tìm thấy cột '{COLUMN_NAME}' trong file CSV.")
+# chạy chương trình
+print("-> Đang đọc dữ liệu...")
+df = pd.read_csv(INPUT_FILE)
+df = df.dropna(subset=['content_text'])  # Xóa dòng bị trống nội dung
 
-    # Loại bỏ các dòng trống (NaN) ngay từ đầu
-    df = df.dropna(subset=[COLUMN_NAME])
-    print(f"Số lượng dòng dữ liệu: {len(df)}")
-
-    # Hiển thị 5 dòng đầu tiên để kiểm tra
-    print(df.head())
-
-except FileNotFoundError:
-    print(f"Lỗi: Không tìm thấy file '{INPUT_FILE}'.")
-
-# Tiền xử lý dữ liệu văn bản
-
-# Áp dụng hàm preprocess_text cho cột nội dung
-df['clean_text'] = df[COLUMN_NAME].apply(preprocess_text)
-
-# Loại bỏ những dòng sau khi clean mà bị rỗng (ví dụ dòng chỉ chứa icon hoặc stopword)
+print("-> Đang tiền xử lý (Làm sạch & Tách từ)...")
+# Áp dụng hàm preprocess_text ở trên cho từng dòng
+df['clean_text'] = df['content_text'].apply(preprocess_text)
+# Xóa những dòng sau khi làm sạch thì không còn gì (ví dụ toàn icon)
 df = df[df['clean_text'].str.strip() != ""]
-print(df[['clean_text']].head()) # Xem kết quả sau khi làm sạch
 
-#Vectorize văn bản bằng TF-IDF
+# --- KỸ THUẬT HYBRID ---
+# Tại sao dùng 2 cái Vectorizer?
+# - TfidfVectorizer: Giỏi việc TÌM ra từ quan trọng, lọc bỏ từ rác xuất hiện quá nhiều.
+# - CountVectorizer: Giỏi việc ĐẾM số lần xuất hiện (thích hợp cho LDA ).
 
-# Cấu hình TF-IDF:
-# - max_features=1500: Chỉ lấy 1500 từ quan trọng nhất
-# - min_df=5: Từ phải xuất hiện ít nhất trong 5 văn bản
-# - max_df=0.9: Loại bỏ từ xuất hiện quá nhiều (trên 90% văn bản - thường là từ phổ thông)
-vectorizer = TfidfVectorizer(max_features=1500, min_df=5, max_df=0.9)
-X = vectorizer.fit_transform(df['clean_text'])
-print(f"Kích thước ma trận TF-IDF: {X.shape}")
-
-# Xây dựng mô hình LDA để phân nhóm chủ đề
-NUM_TOPICS = 5 # Số lượng chủ đề muốn tìm
-
-# Khởi tạo mô hình LDA
-lda_model = LatentDirichletAllocation(
-    n_components=NUM_TOPICS, # Số chủ đề
-    random_state=42, # Đặt seed để kết quả có thể tái lập
-    learning_method='online', # 'online' thường nhanh hơn cho dữ liệu lớn
-    n_jobs=-1 # Sử dụng tất cả CPU core
+print("-> Dùng TF-IDF để lọc từ quan trọng ...")
+tfidf_vectorizer = TfidfVectorizer(
+    max_features=500,  # Chỉ lấy 1500 từ quan trọng nhất
+    min_df=10,  # Từ phải xuất hiện ít nhất trong 10 bài mới tính (bỏ từ sai chính tả, quá hiếm)
+    max_df=0.5  # Bỏ từ xuất hiện trong hơn 50% số bài (từ quá phổ thông như 'hôm nay', 'người dân')
 )
-lda_model.fit(X)# Huấn luyện mô hình LDA trên ma trận TF-IDF
+tfidf_vectorizer.fit(df['clean_text']) # Học bộ từ vựng từ dữ liệu
+top_vocabulary = tfidf_vectorizer.get_feature_names_out()  # Lấy danh sách từ vựng đã lọc
 
-# Gán chủ đề cho từng văn bản
-topic_results = lda_model.transform(X)# Lấy xác suất chủ đề cho từng văn bản
-df['Topic_ID'] = topic_results.argmax(axis=1) # Lấy index của chủ đề có xác suất cao nhất
+print("-> Chuyển dữ liệu sang dạng số đếm cho LDA...")
+# Dùng bộ từ đã lọc ở trên để đếm
+vectorizer = CountVectorizer(vocabulary=top_vocabulary)
+X = vectorizer.fit_transform(df['clean_text'])
 
-# Hàm lấy từ khóa đặc trưng cho từng chủ đề
-def get_topic_keywords(model, feature_names, n_top_words=5):
-    topic_keywords = {}
-    for topic_idx, topic in enumerate(model.components_):
-        # Sắp xếp và lấy index của n từ có trọng số cao nhất
-        top_features_ind = topic.argsort()[:-n_top_words - 1:-1]
-        keywords = [feature_names[i] for i in top_features_ind]
-        topic_keywords[topic_idx] = ", ".join(keywords)
-    return topic_keywords
+print(f"-> Đang chạy mô hình LDA => tìm {NUM_TOPICS} chủ đề...")
+lda_model = LatentDirichletAllocation(
+    n_components=NUM_TOPICS,  # Số chủ đề
+    max_iter=50,  # Số lần học lặp lại (càng cao càng kỹ nhưng lâu)
+    learning_method='batch',  # Học theo lô (với dữ liệu nhỏ=> cho hiệu quả hơn)
+    random_state=42,  # Giữ cố định kết quả mỗi lần chạy
+    learning_offset=50.0,  # Tham số ổn định (giá trị lớn hơn 1.0)
+    evaluate_every=-1,  # Không đánh giá trong quá trình học (tiết kim thời gian)
+    verbose=1,  # Hiện tiến trình học
+    doc_topic_prior=0.1,# Mức độ tập trung chủ đề trong mỗi tài liệu
+    topic_word_prior=0.01,# Mức độ tập trung từ trong mỗi chủ đề
+    n_jobs=-1  # Dùng tất cả nhân CPU để chạy cho nhanh
+)
+lda_model.fit(X)
 
-# Lấy danh sách từ khóa từ vectorizer
+# Lưu model và dữ liệu đã xử lý
+print("->Đang lưu model...")
+joblib.dump(vectorizer, 'vectorizer.pkl')  # Lưu bộ đếm
+joblib.dump(lda_model, 'lda_model.pkl')  # Lưu trí tuệ của AI
+joblib.dump(X, 'data_vectorized.pkl')  # Lưu dữ liệu đã số hóa
+
+print("-> Đang đặt tên cho chủ đề...")
 feature_names = vectorizer.get_feature_names_out()
-keywords_map = get_topic_keywords(lda_model, feature_names)
+topic_names = {}
+topic_keywords = {}
 
-# Map từ khóa vào DataFrame
-df['Topic_Keywords'] = df['Topic_ID'].map(keywords_map)
+# Duyệt qua từng chủ đề tìm được để đặt tên
+for topic_idx, topic in enumerate(lda_model.components_):
+    # Lấy 3 từ trọng số cao nhất để ghép thành tên chủ đề
+    top_3_ind = topic.argsort()[:-4:-1]
+    name_parts = [feature_names[i].replace("_", " ").title() for i in top_3_ind]
+    topic_names[topic_idx] = " - ".join(name_parts)
 
-print("Kết quả phân loại chủ đề:")
-print(df[[COLUMN_NAME, 'Topic_ID', 'Topic_Keywords']].head())
+    # Lấy 10 từ khóa đặc trưng nhất để mô tả
+    top_10 = topic.argsort()[:-11:-1]
+    topic_keywords[topic_idx] = ", ".join([feature_names[i] for i in top_10])
 
-# Lưu kết quả ra file CSV
-# encoding='utf-8-sig' rất quan trọng để Excel mở tiếng Việt không bị lỗi font
+# Gán ngược lại vào file Excel
+topic_values = lda_model.transform(X)
+df['Topic_ID'] = topic_values.argmax(axis=1)  # Bài này nghiêng về chủ đề nào nhất?
+df['Topic_Name'] = df['Topic_ID'].map(topic_names)# Gán tên chủ đề
+df['Topic_Keywords'] = df['Topic_ID'].map(topic_keywords)# Gán từ khóa chủ đề
+
 df.to_csv(OUTPUT_FILE, index=False, encoding='utf-8-sig')
-
+print(f"-> Hoàn tất! Kết quả đã lưu vào '{OUTPUT_FILE}'")
