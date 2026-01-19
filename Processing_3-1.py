@@ -30,8 +30,9 @@ def preprocess_text(text):
     # 1. Chuyển về chữ thường để "Hà Nội" và "hà nội" là một
     text = text.lower()
 
-    # 2. Xóa các ký tự đặc biệt (!@#$%), chỉ giữ lại chữ cái và số
+    # 2. Xóa các ký tự đặc biệt (!@#$%) và số, chỉ giữ lại chữ cái
     text = re.sub(r'[^\w\s]', '', text)
+    text = re.sub(r'\b\d+\b', '', text)
 
     # 3. Tách từ thông minh (Quan trọng với tiếng Việt)
     # Ví dụ: "đất nước" -> "đất_nước" (gộp thành 1 từ có nghĩa)
@@ -80,7 +81,7 @@ lda_model = LatentDirichletAllocation(
     learning_method='batch',  # Học theo lô (với dữ liệu nhỏ=> cho hiệu quả hơn)
     random_state=42,  # Giữ cố định kết quả mỗi lần chạy
     learning_offset=50.0,  # Tham số ổn định (giá trị lớn hơn 1.0)
-    evaluate_every=-1,  # Không đánh giá trong quá trình học (tiết kim thời gian)
+    evaluate_every=-1, # Không đánh giá trong quá trình học
     verbose=1,  # Hiện tiến trình học
     doc_topic_prior=0.1,# Mức độ tập trung chủ đề trong mỗi tài liệu
     topic_word_prior=0.01,# Mức độ tập trung từ trong mỗi chủ đề
