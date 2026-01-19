@@ -9,7 +9,7 @@ from sklearn.decomposition import LatentDirichletAllocation  # Thuật toán LDA
 # --- Cấu Hình ---
 INPUT_FILE = 'dataset.csv'  # File dữ liệu đầu vào
 OUTPUT_FILE = 'preprocessing.csv'  # File kết quả đầu ra
-NUM_TOPICS = 8  # Số lượng chủ đề muốn máy tìm
+NUM_TOPICS = 7  # Số lượng chủ đề muốn máy tìm
 STOPWORDS = set()  # Tập hợp các từ vô nghĩa (thì, là, mà...)
 STOP_FILES = ['vietnamese-stopwords.txt']  # File chứa danh sách từ vô nghĩa
 
@@ -25,24 +25,20 @@ for f in STOP_FILES:
 
 # Hàm làm sạch và tách từ
 def preprocess_text(text):
-    if not isinstance(text, str): return ""  # Kiểm tra nếu không phải chữ thì bỏ qua
-
-    # 1. Chuyển về chữ thường để "Hà Nội" và "hà nội" là một
+    if not isinstance(text, str): return ""
+    # Chuyển về chữ thường
     text = text.lower()
-
-    # 2. Xóa các ký tự đặc biệt (!@#$%) và số, chỉ giữ lại chữ cái
-    text = re.sub(r'[^\w\s]', '', text)
-    text = re.sub(r'\b\d+\b', '', text)
-
-    # 3. Tách từ thông minh (Quan trọng với tiếng Việt)
-    # Ví dụ: "đất nước" -> "đất_nước" (gộp thành 1 từ có nghĩa)
+    # Loại bỏ boilerplate (Tên tác giả/Nguồn ở cuối bài)
+    text = re.sub(r'\([^)]*theo[^)]*\)\s*$', '', text)
+    # Loại bỏ URL
+    text = re.sub(r'http\S+', '', text)
+    # Chỉ giữ lại chữ cái tiếng Việt, tiếng Anh và khoảng trắng
+    text = re.sub(r'[^a-zàáãạảăắằẳẵặâấầẩẫậèéẹẻẽêềếểễệđìíĩỉịòóõọỏôốồổỗộơớờởỡợùúũụủưứừửữựỳỵỷỹý\s]', '', text)
+    # Tách từ bằng underthesea
     tokens = word_tokenize(text, format="text").split()
-
-    # 4. Lọc bỏ từ vô nghĩa (stopwords) và từ quá ngắn (1 ký tự)
-    tokens = [t for t in tokens if t not in STOPWORDS and len(t) > 1]
-
+    # Lọc stopwords
+    tokens = [w for w in tokens if w not in STOPWORDS and len(w) > 1]
     return " ".join(tokens)
-
 
 # chạy chương trình
 print("-> Đang đọc dữ liệu...")
@@ -62,9 +58,9 @@ df = df[df['clean_text'].str.strip() != ""]
 
 print("-> Dùng TF-IDF để lọc từ quan trọng ...")
 tfidf_vectorizer = TfidfVectorizer(
-    max_features=500,  # Chỉ lấy 1500 từ quan trọng nhất
-    min_df=10,  # Từ phải xuất hiện ít nhất trong 10 bài mới tính (bỏ từ sai chính tả, quá hiếm)
-    max_df=0.5  # Bỏ từ xuất hiện trong hơn 50% số bài (từ quá phổ thông như 'hôm nay', 'người dân')
+    max_features=1500,  # Chỉ lấy 1500 từ quan trọng nhất
+    min_df=20,  # Từ phải xuất hiện ít nhất trong 10 bài mới tính (bỏ từ sai chính tả, quá hiếm)
+    max_df=0.9  # Bỏ từ xuất hiện trong hơn 50% số bài (từ quá phổ thông như 'hôm nay', 'người dân')
 )
 tfidf_vectorizer.fit(df['clean_text']) # Học bộ từ vựng từ dữ liệu
 top_vocabulary = tfidf_vectorizer.get_feature_names_out()  # Lấy danh sách từ vựng đã lọc
