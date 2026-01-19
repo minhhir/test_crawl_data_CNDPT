@@ -101,9 +101,17 @@ def scrape_data(base_url, target_count=300):#target_count: Số bài tự dộng
 
 
 if __name__ == "__main__":
+<<<<<<< HEAD
     # nếu file dataset.csv đã tồn tại thì xóa đi để cào lại
     import os
     if os.path.exists("dataset.csv"):
         os.remove("dataset.csv")
     #cào dữ liệu
     scrape_data("https://vnexpress.net/thoi-su", target_count=300) #target_count: Số bài muốn cào
+=======
+    #mỗi lần cào thì sẽ tạo dataset mới đè lên cái cũ
+    import os
+    if os.path.exists("dataset.csv"):
+        os.remove("dataset.csv")
+    scrape_data("https://vnexpress.net/thoi-su", target_count=350) #target_count: Số bài muốn cào
+>>>>>>> ec073a032456692592646b96ca23d727c7dec04f
